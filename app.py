@@ -1,25 +1,47 @@
 from flask import Flask, request, redirect, url_for, session, render_template_string
-import math, datetime, os
+import math, datetime, os, sqlite3
 
 app = Flask(__name__)
 app.secret_key = "your_secret_key"
 
-LOG_FILE = "user_activity.log"
+DB_FILE = "user_activity.db"
 ADMIN_PASSWORD = "admin123"
 
+# ---------------- Database Setup ---------------- #
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            username TEXT,
+            action TEXT,
+            details TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-'''
--------if the admin delete all the past stored data-------
-
-with open("user_activity.log", "w", encoding="utf-8") as f:
-    f.write("")  # Clears all content
-print("User activity log cleared!") '''
+init_db()  # Initialize DB on startup
 
 # ---------------- Utility ---------------- #
 def log_activity(username, action, details):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(LOG_FILE, "a", encoding="utf-8") as f:  # UTF-8 safe
-        f.write(f"[{timestamp}] {username} - {action} - {details}\n")
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT INTO logs (timestamp, username, action, details) VALUES (?, ?, ?, ?)",
+              (timestamp, username, action, details))
+    conn.commit()
+    conn.close()
+
+def get_all_logs():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT timestamp, username, action, details FROM logs ORDER BY id DESC")
+    rows = c.fetchall()
+    conn.close()
+    return rows
 
 # ---------------- Math Functions ---------------- #
 def is_armstrong(n): 
@@ -75,14 +97,11 @@ index_template = """<!DOCTYPE html>
 <html>
 <head><title>Welcome - Sai Ganapathi</title></head>
 <body style="background:#0288d1;color:white;text-align:center;font-family:Arial;">
-  
-  <!-- Welcome Header -->
   <div style="margin-top:5%; margin-bottom:30px;">
     <h1 style="color:#ffeb3b; font-size:32px; font-weight:bold; text-shadow:1px 1px 5px #000;">
       👋 Hello, Welcome! This page is created by Sai Ganapathi
     </h1>
   </div>
-
   <div style="margin-top:5%; background:#003f7f; padding:40px; border-radius:12px; display:inline-block; box-shadow:0px 0px 20px rgba(0,0,0,0.3);">
     <h1 style="margin-bottom:20px;">Choose Mode</h1>
     <a href="{{ url_for('home') }}">
@@ -109,7 +128,6 @@ home_template = """<!DOCTYPE html><html><head><title>User Login</title></head>
 menu_template = """<!DOCTYPE html><html><head><title>Menu</title></head>
 <body style="background:#0288d1;color:white;text-align:center;font-family:Arial;">
   <h1>Hello {{ username }}! Welcome 🎉</h1>
-
   <div style="margin:20px;">
     {% for func, label in functions.items() %}
       <a href="{{ url_for('check', function_name=func) }}">
@@ -119,7 +137,6 @@ menu_template = """<!DOCTYPE html><html><head><title>Menu</title></head>
       </a>
     {% endfor %}
   </div>
-
   <br><h3>Give Me Feedback Here👇</h3>
   <form id="feedback-form">
     <input type="text" name="body" placeholder="Enter feedback here..." style="width:600px; padding:10px;" required>
@@ -127,7 +144,6 @@ menu_template = """<!DOCTYPE html><html><head><title>Menu</title></head>
   </form>
   <div id="feedback-status" style="margin-top:10px;"></div>
   <br><a href="{{ url_for('logout') }}" style="color:white;">Exit</a>
-
 <script>
 document.getElementById('feedback-form').addEventListener('submit', async function(e){
   e.preventDefault();
@@ -144,7 +160,6 @@ document.getElementById('feedback-form').addEventListener('submit', async functi
   } catch {statusDiv.style.color="salmon";statusDiv.textContent="❌ Network error.";}
 });
 </script>
-
 <script>
 window.addEventListener("beforeunload", function () {
     navigator.sendBeacon("/track_exit");
@@ -192,7 +207,7 @@ logs_template = """<!DOCTYPE html><html><head><title>Logs</title></head>
 # ---------------- Routes ---------------- #
 @app.route("/")
 def index():
-    session.clear()  # clear session on landing
+    session.clear()
     return render_template_string(index_template)
 
 @app.route("/home", methods=["GET", "POST"])
@@ -268,29 +283,52 @@ def admin_login():
     error = None
     if request.method == "POST":
         if request.form["password"] == ADMIN_PASSWORD:
-            logs = ""
-            if os.path.exists(LOG_FILE):
-                with open(LOG_FILE, encoding="utf-8") as f:
-                    raw_logs = f.readlines()
-                    user_block = ""
-                    for line in raw_logs:
-                        # Split logout line to compute duration
-                        if "Logout" in line:
-                            parts = line.strip().split("Stayed")
-                            if len(parts) == 2:
-                                # Convert minutes to HH:MM:SS
-                                minutes = float(parts[1].split()[0])
-                                hours = int(minutes // 60)
-                                mins = int(minutes % 60)
-                                secs = int((minutes - int(minutes)) * 60)
-                                time_str = f"{hours:02d}:{mins:02d}:{secs:02d}"
-                                line = f"{parts[0]}Stayed {time_str} (HH:MM:SS)\n"
-                        user_block += line
-                        # Add two line breaks after each Logout
-                        if "Logout" in line:
-                            user_block += "\n\n"
-                    logs = user_block
-            return render_template_string(logs_template, logs=logs)
+            logs_rows = get_all_logs()  # all logs from DB
+            logs_rows.sort(key=lambda x: x[0])  # sort by timestamp
+
+            sessions = []
+            current_session = []
+            in_session = False
+
+            for timestamp, username, action, details in logs_rows:
+                line = f"[{timestamp}] {username} - {action} - {details}"
+
+                if action == "Login":
+                    # Start a new session
+                    if current_session:
+                        sessions.append(current_session)
+                    current_session = [line]
+                    in_session = True
+                elif action in ["Logout", "Exit"]:
+                    if in_session:
+                        current_session.append(line)
+                        sessions.append(current_session)
+                        current_session = []
+                        in_session = False
+                    else:
+                        # Exit without Login, treat as single-session
+                        sessions.append([line])
+                else:
+                    # Any other action
+                    if not in_session:
+                        # Action without login, treat as pseudo-session
+                        current_session = [line]
+                        in_session = True
+                    else:
+                        current_session.append(line)
+
+            # Append remaining session if any
+            if current_session:
+                sessions.append(current_session)
+
+            # Format logs for display
+            formatted_logs = ""
+            for session_block in sessions:
+                for line in session_block:
+                    formatted_logs += line + "\n"
+                formatted_logs += "\n\n"  # 2 blank lines between sessions
+
+            return render_template_string(logs_template, logs=formatted_logs)
         else:
             error = "❌ Incorrect password"
     return render_template_string(admin_login_template, error=error)
@@ -299,4 +337,3 @@ def admin_login():
 # ---------------- Main ---------------- #
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
-
