@@ -120,7 +120,7 @@ menu_template = """<!DOCTYPE html><html><head><title>Menu</title></head>
     {% endfor %}
   </div>
 
-  <br><h3>Feedback</h3>
+  <br><h3>Give Me Feedback Here👇</h3>
   <form id="feedback-form">
     <input type="text" name="body" placeholder="Enter feedback here..." style="width:600px; padding:10px;" required>
     <button type="submit" style="padding:10px 20px; background:#ff9800; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">Submit Feedback</button>
@@ -299,3 +299,4 @@ def admin_login():
 # ---------------- Main ---------------- #
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
+
